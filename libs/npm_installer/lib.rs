@@ -363,7 +363,12 @@ impl<TNpmCacheHttpClient: NpmCacheHttpClient, TSys: NpmInstallerSys>
         .collect::<Vec<_>>()
     };
 
-    if uncached.is_empty() {
+    // When caching the whole resolution from a pending snapshot, there may be no
+    // explicit package reqs on this call. We still need to sync the filesystem
+    // so package.json dependencies and workspace lifecycle scripts are installed.
+    let should_cache_all_packages =
+      packages.is_empty() && matches!(caching, PackageCaching::All);
+    if uncached.is_empty() && !should_cache_all_packages {
       return Ok(());
     }
     let result = self.fs_installer.cache_packages(caching).await;
