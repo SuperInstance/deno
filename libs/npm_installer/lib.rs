@@ -363,12 +363,15 @@ impl<TNpmCacheHttpClient: NpmCacheHttpClient, TSys: NpmInstallerSys>
         .collect::<Vec<_>>()
     };
 
-    // When caching the whole resolution from a pending snapshot, there may be no
-    // explicit package reqs on this call. We still need to sync the filesystem
-    // so package.json dependencies and workspace lifecycle scripts are installed.
-    let should_cache_all_packages =
-      packages.is_empty() && matches!(caching, PackageCaching::All);
-    if uncached.is_empty() && !should_cache_all_packages {
+    if uncached.is_empty() {
+      // Even when every requested package is already cached we still need to
+      // sync the node_modules directory for a full install (e.g. after
+      // `deno remove`), otherwise stale packages are left on disk. Only do this
+      // for `All` caching so the hot path of running a script (which caches a
+      // specific subset) keeps short-circuiting.
+      if matches!(caching, PackageCaching::All) {
+        return self.fs_installer.cache_packages(caching).await;
+      }
       return Ok(());
     }
     let result = self.fs_installer.cache_packages(caching).await;
