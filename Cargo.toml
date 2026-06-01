@@ -607,3 +607,9 @@ opt-level = 3
 opt-level = 3
 [profile.release.package.twox-hash]
 opt-level = 3
+
+# TEMPORARY: consume deno_doc PR denoland/deno_doc#800 (@event / @fires /
+# @listens JSDoc tags). Drop this patch and bump `deno_doc` in
+# `[workspace.dependencies]` once the upstream PR is merged and released.
+[patch.crates-io]
+deno_doc = { git = "https://github.com/divybot/deno_doc.git", rev = "aad8134131c6a65f39c3198cb9ad97c01220a51f" }

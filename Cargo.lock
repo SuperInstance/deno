@@ -1072,7 +1072,7 @@ version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe6d2e5af09e8c8ad56c969f2157a3d4238cebc7c55f0a517728c38f7b200f81"
 dependencies = [
- "unicode-width 0.2.2",
+ "unicode-width 0.1.13",
 ]
 
 [[package]]
@@ -2202,8 +2202,7 @@ dependencies = [
 [[package]]
 name = "deno_doc"
 version = "0.199.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "638edca809f05908e5725d60c2700c92a6cc2d39a57f0b536008001d1050a16b"
+source = "git+https://github.com/divybot/deno_doc.git?rev=aad8134131c6a65f39c3198cb9ad97c01220a51f#aad8134131c6a65f39c3198cb9ad97c01220a51f"
 dependencies = [
  "anyhow",
  "cfg-if",
