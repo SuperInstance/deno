@@ -416,6 +416,7 @@ impl LifecycleScriptsExecutor for DenoTaskLifeCycleScriptsExecutor {
     let layers = compute_lifecycle_script_layers(
       options.packages_with_scripts,
       options.snapshot,
+      options.additional_packages,
     );
 
     for layer in &layers {
@@ -536,6 +537,7 @@ impl DenoTaskLifeCycleScriptsExecutor {
         base_custom_commands.clone(),
         package,
         options.snapshot,
+        options.additional_packages,
       )
       .await;
 
@@ -713,6 +715,7 @@ impl DenoTaskLifeCycleScriptsExecutor {
     baseline: crate::task_runner::TaskCustomCommands,
     package: &NpmResolutionPackage,
     snapshot: &NpmResolutionSnapshot,
+    additional_packages: &[&NpmResolutionPackage],
   ) -> crate::task_runner::TaskCustomCommands {
     let sys = CliSys::default();
     let mut bin_entries = BinEntries::new(sys.with_paths_in_errors());
@@ -723,7 +726,12 @@ impl DenoTaskLifeCycleScriptsExecutor {
         baseline,
         snapshot,
         package.dependencies.iter().filter_map(|(name, id)| {
-          let dep = snapshot.package_from_id(id).unwrap();
+          let dep = snapshot.package_from_id(id).or_else(|| {
+            additional_packages
+              .iter()
+              .find(|package| package.id == *id)
+              .copied()
+          })?;
           // Skip optional dependencies that don't match the current system
           if package.optional_dependencies.contains(name)
             && !dep.system.matches_system(&self.system_info)
