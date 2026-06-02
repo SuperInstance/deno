@@ -88,6 +88,92 @@ This should start a local web server on
 Learn more about writing and running Deno programs
 [in the docs](https://docs.deno.com/runtime/manual).
 
+## Resource Guardian
+
+Your Deno worker just consumed 4GB of memory processing a 50MB CSV. It's still
+running. The other 11 workers on the same machine are starving.
+
+The Resource Guardian prevents this. Each worker gets a resource budget, and
+the runtime enforces it in three phases:
+
+**Per-worker budgets** – configure CPU time, heap memory, network throughput,
+and file descriptors per worker:
+
+```toml
+# deno.json
+{
+  "resourceGuardian": {
+    "workers": {
+      "data-pipeline": {
+        "memory": "512MB",
+        "cpu": "5000ms",
+        "network": "50MB/s",
+        "fileHandles": 512
+      },
+      "http-handler": {
+        "memory": "64MB",
+        "cpu": "1000ms",
+        "network": "10MB/s",
+        "fileHandles": 128
+      }
+    }
+  }
+}
+```
+
+**Phase enforcement** – each resource dimension is checked independently:
+
+| Phase    | Threshold | Behaviour                                       |
+|----------|-----------|-------------------------------------------------|
+| Warning  | 70%       | Metrics published, logs emitted                 |
+| Degraded | 85%       | New allocations throttled, backpressure applied |
+| Hard stop| 100%      | Isolate terminated, other workers unaffected    |
+
+**System conservation** – total worker CPU utilisation must not exceed 80 % of
+system capacity. This prevents run-away scheduling from degrading co-located
+system processes.
+
+### How it works
+
+The guardian hooks into V8's near-heap-limit callback for memory enforcement.
+When a worker approaches its budget, the callback blocks heap growth instead of
+letting V8 double the limit. CPU and network budgets are tracked across a
+configurable enforcement window (default 5 seconds). At the end of each window,
+the guardian checks every tracked worker against its budget and phases.
+
+```rust
+// In code: register a worker and let the guardian enforce
+let guardian = ResourceGuardian::new();
+let usage = guardian.register_worker("data-pipeline", ResourceBudget::heavy());
+
+// Wire the V8 near-heap-limit callback
+isolate.add_near_heap_limit_callback(
+    ResourceGuardian::v8_near_heap_limit_callback(usage.clone()),
+);
+
+// Periodically enforce
+for label in guardian.enforce() {
+    terminate_worker(&label);
+}
+```
+
+**Rogue worker hit 512MB, stopped in 200ms. Other 11 workers never noticed.
+Before: OOM killer took down everything.**
+
+### Budget presets
+
+| Preset | Memory  | CPU     | Network    | File handles | Use case                |
+|--------|---------|---------|------------|--------------|-------------------------|
+| Small  | 64 MB   | 1 sec   | 10 MB/s    | 256          | HTTP handlers, proxies  |
+| Medium | 256 MB  | 5 sec   | 50 MB/s    | 512          | Data pipelines          |
+| Heavy  | 1 GB    | 15 sec  | 200 MB/s   | 2048         | Build steps, ETL jobs   |
+
+Enable or disable the guardian globally at runtime:
+
+```js
+Deno.resourceGuardian.setEnabled(false);
+```
+
 ## Additional resources
 
 - **[Deno Docs](https://docs.deno.com)**: official guides and reference docs for

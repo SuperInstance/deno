@@ -38,6 +38,7 @@ pub mod fmt_errors;
 pub mod js;
 pub mod ops;
 pub mod permissions;
+pub mod resource_guardian;
 #[cfg(feature = "snapshot")]
 pub mod snapshot;
 pub mod snapshot_info;
