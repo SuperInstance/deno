@@ -90,88 +90,116 @@ Learn more about writing and running Deno programs
 
 ## Resource Guardian
 
-Your Deno worker just consumed 4GB of memory processing a 50MB CSV. It's still
-running. The other 11 workers on the same machine are starving.
+One worker goes rogue and eats all the memory. The OOM killer takes down
+everything — the rogue *and* the 11 healthy workers beside it.
 
-The Resource Guardian prevents this. Each worker gets a resource budget, and
-the runtime enforces it in three phases:
+Resource Guardian gives each worker a budget and enforces it. The rogue gets
+terminated; the other 11 never notice.
 
-**Per-worker budgets** – configure CPU time, heap memory, network throughput,
-and file descriptors per worker:
+**Added in this fork:** `runtime/resource_guardian.rs` (618 lines of Rust, 11
+unit tests). Zero changes to the existing codebase — `runtime/lib.rs` adds one
+`mod` declaration.
 
-```toml
-# deno.json
-{
-  "resourceGuardian": {
-    "workers": {
-      "data-pipeline": {
-        "memory": "512MB",
-        "cpu": "5000ms",
-        "network": "50MB/s",
-        "fileHandles": 512
-      },
-      "http-handler": {
-        "memory": "64MB",
-        "cpu": "1000ms",
-        "network": "10MB/s",
-        "fileHandles": 128
-      }
-    }
-  }
-}
-```
+### Budgets
 
-**Phase enforcement** – each resource dimension is checked independently:
-
-| Phase    | Threshold | Behaviour                                       |
-|----------|-----------|-------------------------------------------------|
-| Warning  | 70%       | Metrics published, logs emitted                 |
-| Degraded | 85%       | New allocations throttled, backpressure applied |
-| Hard stop| 100%      | Isolate terminated, other workers unaffected    |
-
-**System conservation** – total worker CPU utilisation must not exceed 80 % of
-system capacity. This prevents run-away scheduling from degrading co-located
-system processes.
-
-### How it works
-
-The guardian hooks into V8's near-heap-limit callback for memory enforcement.
-When a worker approaches its budget, the callback blocks heap growth instead of
-letting V8 double the limit. CPU and network budgets are tracked across a
-configurable enforcement window (default 5 seconds). At the end of each window,
-the guardian checks every tracked worker against its budget and phases.
+Each worker gets limits on four dimensions — heap memory, CPU time, network
+throughput, and open file handles:
 
 ```rust
-// In code: register a worker and let the guardian enforce
-let guardian = ResourceGuardian::new();
-let usage = guardian.register_worker("data-pipeline", ResourceBudget::heavy());
+let budget = ResourceBudget {
+    memory: 256 * 1024 * 1024,       // 256 MB
+    cpu: 5_000,                       // 5 seconds per enforcement window
+    network: 50 * 1024 * 1024,        // 50 MB/s
+    file_handles: 512,
+};
+```
 
-// Wire the V8 near-heap-limit callback
+Three presets for common cases:
+
+| Preset   | Memory | CPU   | Network | File handles |
+|----------|--------|-------|---------|--------------|
+| `small`  | 64 MB  | 1 s   | 10 MB/s | 256          |
+| `medium` | 256 MB | 5 s   | 50 MB/s | 512          |
+| `heavy`  | 1 GB   | 15 s  | 200 MB/s| 2 048        |
+
+### Three enforcement phases
+
+The guardian checks each dimension independently:
+
+| Phase     | At    | What happens                               |
+|-----------|-------|--------------------------------------------|
+| Warning   | 70 %  | Log + metrics                              |
+| Degraded  | 85 %  | Throttle new allocations                   |
+| Hard stop | 100 % | Terminate isolate, leave other workers alone |
+
+Logs you'll actually see:
+
+```
+WARN  [resource-guardian] WARNING 'data-pipeline' at 72.3% — mem=90.1% cpu=12.0% net=5.2% files=0.4%
+WARN  [resource-guardian] DEGRADED 'data-pipeline' at 86.1% — mem=86.1% cpu=30.0% net=8.1% files=0.6%
+ERROR [resource-guardian] HARD STOP 'data-pipeline' — mem=101.2% cpu=45.0% net=12.0% files=0.8%
+```
+
+### System conservation
+
+Separate from per-worker budgets: total worker CPU must stay under 80 % of
+system capacity. If 12 workers collectively saturate the machine, the
+conservation tracker fires a violation callback *before* co-located processes
+feel it.
+
+```rust
+let mut ct = ConservationTracker::new();
+ct.on_violation(|msg| {
+    eprintln!("conservation breach: {msg}");
+});
+assert!(ct.charge_cpu(500)); // within budget → true
+```
+
+### How to use
+
+The guardian is a Rust API — create one, register workers, wire the V8 heap
+callback, and call `enforce()` every enforcement window (default: 5 seconds):
+
+```rust
+use deno_runtime::resource_guardian::{ResourceGuardian, ResourceBudget};
+
+// One guardian per runtime
+let guardian = ResourceGuardian::new();
+
+// Register a worker with a budget
+let usage = guardian.register_worker(
+    "data-pipeline".into(),
+    ResourceBudget::heavy(),
+);
+
+// Hook into V8's near-heap-limit callback
+// When the worker approaches its memory budget, blocks heap growth
 isolate.add_near_heap_limit_callback(
     ResourceGuardian::v8_near_heap_limit_callback(usage.clone()),
 );
 
-// Periodically enforce
-for label in guardian.enforce() {
-    terminate_worker(&label);
+// Call this every enforcement window
+let terminated = guardian.enforce();
+for label in terminated {
+    // terminate the isolate for `label`
 }
 ```
 
-**Rogue worker hit 512MB, stopped in 200ms. Other 11 workers never noticed.
-Before: OOM killer took down everything.**
+Check live status:
 
-### Budget presets
+```rust
+println!("{}", guardian.status());
+// resource-guardian status:
+//   data-pipeline  mem=45.2% cpu=12.0% net=3.1% files=0.4%
+//   http-handler   mem=8.1% cpu=2.0% net=1.2% files=0.1%
+//   conservation: CPU at 23.4% of 80% target
+```
 
-| Preset | Memory  | CPU     | Network    | File handles | Use case                |
-|--------|---------|---------|------------|--------------|-------------------------|
-| Small  | 64 MB   | 1 sec   | 10 MB/s    | 256          | HTTP handlers, proxies  |
-| Medium | 256 MB  | 5 sec   | 50 MB/s    | 512          | Data pipelines          |
-| Heavy  | 1 GB    | 15 sec  | 200 MB/s   | 2048         | Build steps, ETL jobs   |
+Pause enforcement without unregistering workers:
 
-Enable or disable the guardian globally at runtime:
-
-```js
-Deno.resourceGuardian.setEnabled(false);
+```rust
+guardian.set_enabled(false); // enforce() becomes a no-op
+guardian.set_enabled(true);  // resume
 ```
 
 ## Additional resources
