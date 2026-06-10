@@ -18,7 +18,7 @@ Learn more about the Deno runtime
 ## Installation
 
 Install the Deno runtime on your system using one of the commands below. Note
-that there are a number of ways to install Deno - a comprehensive list of
+that there are a number of ways to install Deno - a list of
 installation options can be found
 [here](https://docs.deno.com/runtime/manual/getting_started/installation).
 
