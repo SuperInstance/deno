@@ -3,7 +3,7 @@
 [package]
 name = "node_shim"
 version = "0.24.0"
-edition = "2024"
+edition = "2021"
 license = "MIT"
 description = "A crate that maps Node.js CLI arguments into Deno arguments."
 
